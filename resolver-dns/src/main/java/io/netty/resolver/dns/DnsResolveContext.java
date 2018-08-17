@@ -492,8 +492,6 @@ abstract class DnsResolveContext<T> {
                 for (int i = 0; i < additionalCount; i++) {
                     final DnsRecord r = res.recordAt(DnsSection.ADDITIONAL, i);
 
-                    final String recordName = r.name();
-
                     if (r.type() == DnsRecordType.A && !parent.supportsARecords() ||
                         r.type() == DnsRecordType.AAAA && !parent.supportsAAAARecords()) {
                         continue;

@@ -83,6 +83,7 @@ import java.util.Map.Entry;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -1505,6 +1506,15 @@ public class DnsNameResolverTest {
 
     @Test
     public void testMultipleAdditionalRecordsForSameNSRecord() throws Exception {
+        testMultipleAdditionalRecordsForSameNSRecord(false);
+    }
+
+    @Test
+    public void testMultipleAdditionalRecordsForSameNSRecordReordered() throws Exception {
+        testMultipleAdditionalRecordsForSameNSRecord(true);
+    }
+
+    private static void testMultipleAdditionalRecordsForSameNSRecord(final boolean reversed) throws Exception {
         final String domain = "netty.io";
         final String hostname = "test.netty.io";
         final String ns1Name = "ns1." + domain;
@@ -1537,10 +1547,33 @@ public class DnsNameResolverTest {
         redirectServer.start();
         EventLoopGroup group = new NioEventLoopGroup(1);
 
+        final List<InetSocketAddress> cached = new CopyOnWriteArrayList<InetSocketAddress>();
+        final AuthoritativeDnsServerCache authoritativeDnsServerCache = new AuthoritativeDnsServerCache() {
+            @Override
+            public DnsServerAddressStream get(String hostname) {
+                return null;
+            }
+
+            @Override
+            public void cache(String hostname, InetSocketAddress address, long originalTtl, EventLoop loop) {
+                cached.add(address);
+            }
+
+            @Override
+            public void clear() {
+                // NOOP
+            }
+
+            @Override
+            public boolean clear(String hostname) {
+                return false;
+            }
+        };
+
         final AtomicReference<DnsServerAddressStream> redirectedRef = new AtomicReference<DnsServerAddressStream>();
         final DnsNameResolver resolver = new DnsNameResolver(
                 group.next(), new ReflectiveChannelFactory<DatagramChannel>(NioDatagramChannel.class),
-                NoopDnsCache.INSTANCE, NoopAuthoritativeDnsServerCache.INSTANCE,
+                NoopDnsCache.INSTANCE, authoritativeDnsServerCache,
                 NoopDnsQueryLifecycleObserverFactory.INSTANCE, 2000, ResolvedAddressTypes.IPV4_ONLY,
                 true, 10, true, 4096,
                 false, HostsFileEntriesResolver.DEFAULT,
@@ -1550,10 +1583,12 @@ public class DnsNameResolverTest {
             @Override
             protected DnsServerAddressStream uncachedRedirectDnsServerStream(
                     String hostname, List<InetSocketAddress> nameservers) {
-                DnsServerAddressStream nameServers = super.uncachedRedirectDnsServerStream(
-                        hostname, nameservers);
-                redirectedRef.set(nameServers.duplicate());
-                return nameServers;
+                if (reversed) {
+                    Collections.reverse(nameservers);
+                }
+                DnsServerAddressStream stream = new SequentialDnsServerAddressStream(nameservers, 0);
+                redirectedRef.set(stream);
+                return stream;
             }
         };
 
@@ -1563,8 +1598,21 @@ public class DnsNameResolverTest {
             DnsServerAddressStream redirected = redirectedRef.get();
             assertNotNull(redirected);
             assertEquals(2, redirected.size());
-            assertEquals(ns1Address, redirected.next());
-            assertEquals(ns2Address, redirected.next());
+
+            assertEquals(2, cached.size());
+
+            // Depending on if we reversed these or not we should have different order in the cache.
+            if (reversed) {
+                assertEquals(ns2Address, redirected.next());
+                assertEquals(ns1Address, redirected.next());
+                assertEquals(ns2Address, cached.get(0));
+                assertEquals(ns1Address, cached.get(1));
+            } else {
+                assertEquals(ns1Address, redirected.next());
+                assertEquals(ns2Address, redirected.next());
+                assertEquals(ns1Address, cached.get(0));
+                assertEquals(ns2Address, cached.get(1));
+            }
         } finally {
             resolver.close();
             group.shutdownGracefully(0, 0, TimeUnit.SECONDS);
