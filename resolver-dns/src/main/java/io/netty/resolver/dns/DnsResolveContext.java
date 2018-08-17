@@ -250,18 +250,6 @@ abstract class DnsResolveContext<T> {
     }
 
     /**
-     * Add an authoritative nameserver to the cache if its not a root server.
-     */
-    private void addNameServerToCache(AuthoritativeNameServer authoritativeNameServer,
-                                      InetSocketAddress nameServer, long ttl) {
-        if (!authoritativeNameServer.isRootServer()) {
-            // Cache NS record if not for a root server as we should never cache for root servers.
-            authoritativeDnsServerCache().cache(authoritativeNameServer.domainName(), nameServer,
-                    ttl, parent.executor());
-        }
-    }
-
-    /**
      * Returns the {@link DnsServerAddressStream} that was cached for the given hostname or {@code null} if non
      *  could be found.
      */
@@ -499,7 +487,6 @@ abstract class DnsResolveContext<T> {
         if (res.count(DnsSection.ANSWER) == 0) {
             AuthoritativeNameServerList serverNames = extractAuthoritativeNameServers(question.name(), res);
             if (serverNames != null) {
-                List<InetSocketAddress> nameServers = new ArrayList<InetSocketAddress>(serverNames.numUnhandled());
                 int additionalCount = res.count(DnsSection.ADDITIONAL);
 
                 for (int i = 0; i < additionalCount; i++) {
@@ -514,49 +501,27 @@ abstract class DnsResolveContext<T> {
 
                     // We may have multiple ADDITIONAL entries for the same nameserver name. For example one AAAA and
                     // one A record.
-                    final AuthoritativeNameServer authoritativeNameServer = serverNames.handle(recordName);
-                    if (authoritativeNameServer == null) {
-                        // Not a server we are interested in.
-                        continue;
-                    }
-
-                    InetAddress resolved = decodeAddress(r, recordName, parent.isDecodeIdn());
-                    if (resolved == null) {
-                        // Could not parse it, move to the next.
-                        continue;
-                    }
-
-                    final InetSocketAddress socketAddress = parent.newRedirectServerAddress(resolved);
-                    nameServers.add(socketAddress);
-
-                    addNameServerToCache(authoritativeNameServer, socketAddress, r.timeToLive());
+                    serverNames.handle(parent, r);
                 }
 
                 // Process all unresolved nameservers as well.
-                for (;;) {
-                    AuthoritativeNameServer authoritativeNameServer = serverNames.handleNext();
+                serverNames.handleAll();
 
-                    if (authoritativeNameServer == null) {
-                        break;
+                // Give the user the chance to sort or filter the used servers for the query.
+                DnsServerAddressStream serverStream = parent.uncachedRedirectDnsServerStream(
+                        question.name(), serverNames.addressList());
+
+                if (serverStream != null) {
+                    // Now cache everything in the same order as the user told us.
+                    DnsServerAddressStream duplicated = serverStream.duplicate();
+                    for (int i = 0; i < duplicated.size(); i++) {
+                        serverNames.cache(authoritativeDnsServerCache(), duplicated.next(), parent.executor());
                     }
-                    // These will be resolved on the fly if needed.
-                    final InetSocketAddress unresolved = InetSocketAddress.createUnresolved(
-                            authoritativeNameServer.nsName, DefaultDnsServerAddressStreamProvider.DNS_PORT);
-                    nameServers.add(unresolved);
 
-                    addNameServerToCache(authoritativeNameServer, unresolved, authoritativeNameServer.timeToLive());
-                }
-
-                if (!nameServers.isEmpty()) {
-                    // Give the user the chance to sort or filter the used servers for the query.
-                    DnsServerAddressStream serverList = parent.uncachedRedirectDnsServerStream(
-                            question.name(), nameServers);
-                    if (serverList != null) {
-                        query(serverList, 0, question,
-                              queryLifecycleObserver.queryRedirected(new DnsAddressStreamList(serverList)),
-                              promise, null);
-                        return true;
-                    }
+                    query(serverStream, 0, question,
+                          queryLifecycleObserver.queryRedirected(new DnsAddressStreamList(serverStream)),
+                          promise, null);
+                    return true;
                 }
             }
         }
@@ -631,7 +596,7 @@ abstract class DnsResolveContext<T> {
         for (int i = 0; i < authorityCount; i++) {
             serverNames.add(res.recordAt(DnsSection.AUTHORITY, i));
         }
-        return serverNames.numUnhandled() > 0 ? serverNames : null;
+        return serverNames.isEmpty() ? null : serverNames;
     }
 
     private void onExpectedResponse(
@@ -963,6 +928,7 @@ abstract class DnsResolveContext<T> {
 
         // We not expect the linked-list to be very long so a double-linked-list is overkill.
         private AuthoritativeNameServer head;
+
         private int count;
 
         AuthoritativeNameServerList(String questionName) {
@@ -1022,61 +988,118 @@ abstract class DnsResolveContext<T> {
         /**
          * Return the {@link AuthoritativeNameServer} for the {@code nsName} and mark it as handled.
          */
-        AuthoritativeNameServer handle(String nsName) {
+        void handle(DnsNameResolver parent, DnsRecord r) {
             // Just walk the linked-list and mark the entry as handled when matched.
             AuthoritativeNameServer serverName = head;
 
+            String nsName = r.name();
             while (serverName != null) {
                 if (serverName.nsName.equalsIgnoreCase(nsName)) {
-                    handled(serverName);
-                    return serverName;
+                    InetAddress resolved = decodeAddress(r, nsName, parent.isDecodeIdn());
+                    if (resolved == null) {
+                        // Could not parse it, move to the next.
+                        continue;
+                    }
+
+                    if (serverName.address != null) {
+                        // We received multiple ADDITIONAL records for the same name.
+                        // Search for the last we insert before and then append a new one.
+                        while (serverName.next != null && serverName.next.isCopy) {
+                            serverName = serverName.next;
+                        }
+                        AuthoritativeNameServer server = new AuthoritativeNameServer(serverName);
+                        server.next = serverName.next;
+                        serverName.next = server;
+                        serverName = server;
+
+                        count++;
+                    }
+                    // We should replace the TTL if needed with the one of the ADDITIONAL record so we use
+                    // the smallest for caching.
+                    serverName.update(parent.newRedirectServerAddress(resolved), r.timeToLive());
+                    return;
                 }
                 serverName = serverName.next;
             }
-            return null;
         }
 
-        /**
-         * Return the next {@link AuthoritativeNameServer} which was not handled yet and mark it as handled. This
-         * will return {@code null} once everything was handled in this {@link AuthoritativeNameServerList}.
-         */
-        AuthoritativeNameServer handleNext() {
+        // No handle all AuthoritativeNameServer for which we had no ADDITIONAL record
+        void handleAll() {
             AuthoritativeNameServer serverName = head;
 
             while (serverName != null) {
-                if (!serverName.handled) {
-                    handled(serverName);
-                    return serverName;
+                if (serverName.address == null) {
+                    // These will be resolved on the fly if needed.
+                    serverName.address = InetSocketAddress.createUnresolved(
+                            serverName.nsName, DefaultDnsServerAddressStreamProvider.DNS_PORT);
                 }
                 serverName = serverName.next;
             }
-            return null;
         }
 
-        private void handled(AuthoritativeNameServer serverName) {
-            serverName.handled = true;
-            --count;
+        /**
+         * Returns {@code true} if empty, {@code false} otherwise.
+         */
+        boolean isEmpty() {
+            return count == 0;
         }
 
-        int numUnhandled() {
-            return count;
+        /**
+         * Creates a new {@link List} which holds the {@link InetSocketAddress}es.
+         */
+        List<InetSocketAddress> addressList() {
+            List<InetSocketAddress> addressList = new ArrayList<InetSocketAddress>(count);
+
+            AuthoritativeNameServer server = head;
+            while (server != null) {
+                if (server.address != null) {
+                    addressList.add(server.address);
+                }
+                server = server.next;
+            }
+            return addressList;
+        }
+
+        /**
+         * Add an authoritative nameserver to the cache if its not a root server.
+         */
+        void cache(AuthoritativeDnsServerCache cache, InetSocketAddress address, EventLoop loop) {
+            AuthoritativeNameServer server = head;
+            while (server != null) {
+                if (!server.isRootServer() && address.equals(server.address())) {
+                    // Cache NS record if not for a root server as we should never cache for root servers.
+                    cache.cache(server.domainName(), server.address(), server.timeToLive(), loop);
+                }
+
+                server = server.next;
+            }
         }
     }
 
-    static final class AuthoritativeNameServer {
+    private static final class AuthoritativeNameServer {
         final int dots;
         final String nsName;
         final String domainName;
-        final long ttl;
+        final boolean isCopy;
 
+        long ttl;
+        InetSocketAddress address;
         AuthoritativeNameServer next;
-        boolean handled;
 
         AuthoritativeNameServer(int dots, long ttl, String domainName, String nsName) {
             this.dots = dots;
             this.ttl = ttl;
             this.nsName = nsName;
             this.domainName = domainName;
+            isCopy = false;
+        }
+
+        AuthoritativeNameServer(AuthoritativeNameServer server) {
+            dots = server.dots;
+            ttl = server.ttl;
+            nsName = server.nsName;
+            domainName = server.domainName;
+            isCopy = true;
         }
 
         /**
@@ -1098,6 +1121,19 @@ abstract class DnsResolveContext<T> {
          */
         long timeToLive() {
             return ttl;
+        }
+
+        InetSocketAddress address() {
+            return address;
+        }
+
+        /**
+         * Update the server with the given address and TTL if needed.
+         */
+        void update(InetSocketAddress address, long ttl) {
+            assert this.address == null;
+            this.address = address;
+            this.ttl = min(timeToLive(), ttl);
         }
     }
 }
