@@ -503,7 +503,7 @@ abstract class DnsResolveContext<T> {
                 }
 
                 // Process all unresolved nameservers as well.
-                serverNames.handleAll();
+                serverNames.handleAll(parent, resolveCache());
 
                 // Give the user the chance to sort or filter the used servers for the query.
                 DnsServerAddressStream serverStream = parent.uncachedRedirectDnsServerStream(
@@ -1022,14 +1022,39 @@ abstract class DnsResolveContext<T> {
         }
 
         // No handle all AuthoritativeNameServer for which we had no ADDITIONAL record
-        void handleAll() {
+        void handleAll(DnsNameResolver parent, DnsCache cache) {
             AuthoritativeNameServer serverName = head;
 
             while (serverName != null) {
                 if (serverName.address == null) {
-                    // These will be resolved on the fly if needed.
-                    serverName.address = InetSocketAddress.createUnresolved(
-                            serverName.nsName, DefaultDnsServerAddressStreamProvider.DNS_PORT);
+                    // Try to resolve via cache
+
+                    List<? extends DnsCacheEntry> entries = cache.get(serverName.nsName, null);
+                    if (entries == null || entries.isEmpty()) {
+                        // These will be resolved on the fly if needed.
+                        serverName.address = InetSocketAddress.createUnresolved(
+                                serverName.nsName, DefaultDnsServerAddressStreamProvider.DNS_PORT);
+                    } else {
+                        // We have some entries in the cache.
+                        for (int i = 0; i < entries.size(); i++) {
+                            DnsCacheEntry entry = entries.get(i);
+                            InetAddress address = entry.address();
+                            if (address != null) {
+                                if (serverName.address != null) {
+                                    AuthoritativeNameServer server = new AuthoritativeNameServer(serverName);
+                                    server.next = serverName.next;
+                                    serverName.next = server;
+                                    serverName = server;
+
+                                    count++;
+                                }
+                                // Use a TTL of Long.MIN_VALUE as we don't want to cache the actual address later on as
+                                // we have no idea about how long the TTL should be. When we encounter Long.MIN_VALUE
+                                // later on we will cache the unresolved address.
+                                serverName.update(parent.newRedirectServerAddress(address), Long.MIN_VALUE);
+                            }
+                        }
+                    }
                 }
                 serverName = serverName.next;
             }
@@ -1064,9 +1089,17 @@ abstract class DnsResolveContext<T> {
         void cache(AuthoritativeDnsServerCache cache, InetSocketAddress address, EventLoop loop) {
             AuthoritativeNameServer server = head;
             while (server != null) {
-                if (!server.isRootServer() && address.equals(server.address())) {
-                    // Cache NS record if not for a root server as we should never cache for root servers.
-                    cache.cache(server.domainName(), server.address(), server.timeToLive(), loop);
+                // Cache NS record if not for a root server as we should never cache for root servers.
+                if (!server.isRootServer() && address.equals(server.address)) {
+
+                    // If we resolved the AuthoritativeNameServer via the DnsCache before we should not cache the
+                    // resolved address as we don't have a good idea about the TTL to apply. We will just cache
+                    // the unresolved address for now. We will then query the cache again the next time we try to use
+                    // it for a query which will do the correct thing in terms of respecting the TTL of the A / AAAA
+                    // record.
+                    InetSocketAddress addressToCache = server.ttl == Long.MIN_VALUE ?
+                            InetSocketAddress.createUnresolved(server.nsName, address.getPort()) : server.address;
+                    cache.cache(server.domainName, addressToCache, server.ttl, loop);
                 }
 
                 server = server.next;
@@ -1075,13 +1108,14 @@ abstract class DnsResolveContext<T> {
     }
 
     private static final class AuthoritativeNameServer {
-        final int dots;
-        final String nsName;
-        final String domainName;
+        private final int dots;
+        private final String domainName;
         final boolean isCopy;
+        final String nsName;
 
-        long ttl;
-        InetSocketAddress address;
+        private long ttl;
+        private InetSocketAddress address;
+
         AuthoritativeNameServer next;
 
         AuthoritativeNameServer(int dots, long ttl, String domainName, String nsName) {
@@ -1108,30 +1142,12 @@ abstract class DnsResolveContext<T> {
         }
 
         /**
-         * The domain for which the {@link AuthoritativeNameServer} is responsible.
-         */
-        String domainName() {
-            return domainName;
-        }
-
-        /**
-         * The TTL for the record.
-         */
-        long timeToLive() {
-            return ttl;
-        }
-
-        InetSocketAddress address() {
-            return address;
-        }
-
-        /**
          * Update the server with the given address and TTL if needed.
          */
         void update(InetSocketAddress address, long ttl) {
             assert this.address == null;
             this.address = address;
-            this.ttl = min(timeToLive(), ttl);
+            this.ttl = min(ttl, ttl);
         }
     }
 }
