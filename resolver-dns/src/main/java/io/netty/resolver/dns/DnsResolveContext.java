@@ -505,17 +505,14 @@ abstract class DnsResolveContext<T> {
                 // Process all unresolved nameservers as well.
                 serverNames.handleWithoutAdditionals(parent, resolveCache());
 
+                List<InetSocketAddress> addresses = serverNames.cacheAndReturnAsList(
+                        authoritativeDnsServerCache(), parent.executor());
+
                 // Give the user the chance to sort or filter the used servers for the query.
                 DnsServerAddressStream serverStream = parent.uncachedRedirectDnsServerStream(
-                        question.name(), serverNames.addressList());
+                        question.name(), addresses);
 
                 if (serverStream != null) {
-                    // Now cache everything in the same order as the user told us.
-                    DnsServerAddressStream duplicated = serverStream.duplicate();
-                    for (int i = 0; i < duplicated.size(); i++) {
-                        serverNames.cache(authoritativeDnsServerCache(), duplicated.next(), parent.executor());
-                    }
-
                     query(serverStream, 0, question,
                           queryLifecycleObserver.queryRedirected(new DnsAddressStreamList(serverStream)),
                           promise, null);
@@ -1066,13 +1063,26 @@ abstract class DnsResolveContext<T> {
         /**
          * Creates a new {@link List} which holds the {@link InetSocketAddress}es.
          */
-        List<InetSocketAddress> addressList() {
+        List<InetSocketAddress> cacheAndReturnAsList(AuthoritativeDnsServerCache cache, EventLoop loop) {
             List<InetSocketAddress> addressList = new ArrayList<InetSocketAddress>(resolvedCount);
 
             AuthoritativeNameServer server = head;
             while (server != null) {
                 if (server.address != null) {
                     addressList.add(server.address);
+
+                    // Cache NS record if not for a root server as we should never cache for root servers.
+                    if (!server.isRootServer() && server.address != null) {
+                        // If we resolved the AuthoritativeNameServer via the DnsCache before we should not cache the
+                        // resolved address as we don't have a good idea about the TTL to apply. We will just cache
+                        // the unresolved address for now. We will then query the cache again the next time we try to
+                        // use it for a query which will do the correct thing in terms of respecting the TTL of the
+                        // A / AAAA record.
+                        InetSocketAddress addressToCache = server.ttl == Long.MIN_VALUE ?
+                                InetSocketAddress.createUnresolved(server.nsName, server.address.getPort()) :
+                                server.address;
+                        cache.cache(server.domainName, addressToCache, server.ttl, loop);
+                    }
                 }
                 server = server.next;
             }

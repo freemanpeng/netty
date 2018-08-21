@@ -1601,18 +1601,17 @@ public class DnsNameResolverTest {
 
             assertEquals(2, cached.size());
 
-            // Depending on if we reversed these or not we should have different order in the cache.
             if (reversed) {
                 assertEquals(ns2Address, redirected.next());
                 assertEquals(ns1Address, redirected.next());
-                assertEquals(ns2Address, cached.get(0));
-                assertEquals(ns1Address, cached.get(1));
             } else {
                 assertEquals(ns1Address, redirected.next());
                 assertEquals(ns2Address, redirected.next());
-                assertEquals(ns1Address, cached.get(0));
-                assertEquals(ns2Address, cached.get(1));
             }
+
+            // We should always have the same order in the cache.
+            assertEquals(ns1Address, cached.get(0));
+            assertEquals(ns2Address, cached.get(1));
         } finally {
             resolver.close();
             group.shutdownGracefully(0, 0, TimeUnit.SECONDS);
