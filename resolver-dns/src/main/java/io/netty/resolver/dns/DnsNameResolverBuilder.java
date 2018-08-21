@@ -370,7 +370,10 @@ public final class DnsNameResolverBuilder {
 
     private AuthoritativeDnsServerCache newAuthoritativeDnsServerCache() {
         return new DefaultAuthoritativeDnsServerCache(
-                intValue(minTtl, 0), intValue(maxTtl, Integer.MAX_VALUE));
+                intValue(minTtl, 0), intValue(maxTtl, Integer.MAX_VALUE),
+                // Let us use the sane ordering as DnsNameResolver will be used when returning
+                // nameservers from the cache.
+                new NameServerComparator(DnsNameResolver.preferredAddressType(resolvedAddressTypes).addressType()));
     }
 
     /**

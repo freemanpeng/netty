@@ -21,22 +21,24 @@ import java.io.Serializable;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.util.Comparator;
+import java.util.List;
 
 /**
  * Special {@link Comparator} implementation to sort the nameservers to use when follow redirects.
  *
- * This implementation follows all the semantics listed in with the limitation that
- * {@link InetSocketAddress#equals(Object)} will not result in the same return value as
- * {@link #compare(InetSocketAddress, InetSocketAddress)}. This is completely fine as we only use it to sort
- * an {@link java.util.List}.
+ * This implementation follows all the semantics listed in the
+ * <a href="https://docs.oracle.com/javase/8/docs/api/java/util/Comparator.html">Comparator apidocs</a>
+ * with the limitation that {@link InetSocketAddress#equals(Object)} will not result in the same return value as
+ * {@link #compare(InetSocketAddress, InetSocketAddress)}. This is completely fine as this should only be used
+ * to sort {@link List}s.
  */
-final class NameServerComparator implements Comparator<InetSocketAddress>, Serializable {
+public final class NameServerComparator implements Comparator<InetSocketAddress>, Serializable {
 
     private static final long serialVersionUID = 8372151874317596185L;
 
     private final Class<? extends InetAddress> preferredAddressType;
 
-    NameServerComparator(Class<? extends InetAddress> preferredAddressType) {
+    public NameServerComparator(Class<? extends InetAddress> preferredAddressType) {
         this.preferredAddressType = ObjectUtil.checkNotNull(preferredAddressType, "preferredAddressType");
     }
 

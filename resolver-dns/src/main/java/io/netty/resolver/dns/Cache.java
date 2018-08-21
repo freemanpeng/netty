@@ -144,6 +144,14 @@ abstract class Cache<E> {
     protected abstract boolean shouldReplaceAll(E entry);
 
     /**
+     * Sort the {@link List} for a {@code hostname} before caching these.
+     */
+    protected void sortEntries(
+            @SuppressWarnings("unused") String hostname, @SuppressWarnings("unused") List<E> entries) {
+        // NOOP.
+    }
+
+    /**
      * Returns {@code true} if both entries are equal.
      */
     protected abstract boolean equals(E entry, E otherEntry);
@@ -203,6 +211,8 @@ abstract class Cache<E> {
                         if (replacedEntry == null) {
                             newEntries.add(e);
                         }
+                        sortEntries(hostname, newEntries);
+
                         if (compareAndSet(entries, Collections.unmodifiableList(newEntries))) {
                             scheduleCacheExpirationIfNeeded(ttl, loop);
                             return;

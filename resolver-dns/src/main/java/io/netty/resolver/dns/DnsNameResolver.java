@@ -317,34 +317,31 @@ public class DnsNameResolver extends InetNameResolver {
                 supportsARecords = true;
                 resolveRecordTypes = IPV4_ONLY_RESOLVED_RECORD_TYPES;
                 resolvedInternetProtocolFamilies = IPV4_ONLY_RESOLVED_PROTOCOL_FAMILIES;
-                preferredAddressType = InternetProtocolFamily.IPv4;
                 break;
             case IPV4_PREFERRED:
                 supportsAAAARecords = true;
                 supportsARecords = true;
                 resolveRecordTypes = IPV4_PREFERRED_RESOLVED_RECORD_TYPES;
                 resolvedInternetProtocolFamilies = IPV4_PREFERRED_RESOLVED_PROTOCOL_FAMILIES;
-                preferredAddressType = InternetProtocolFamily.IPv4;
                 break;
             case IPV6_ONLY:
                 supportsAAAARecords = true;
                 supportsARecords = false;
                 resolveRecordTypes = IPV6_ONLY_RESOLVED_RECORD_TYPES;
                 resolvedInternetProtocolFamilies = IPV6_ONLY_RESOLVED_PROTOCOL_FAMILIES;
-                preferredAddressType = InternetProtocolFamily.IPv6;
                 break;
             case IPV6_PREFERRED:
                 supportsAAAARecords = true;
                 supportsARecords = true;
                 resolveRecordTypes = IPV6_PREFERRED_RESOLVED_RECORD_TYPES;
                 resolvedInternetProtocolFamilies = IPV6_PREFERRED_RESOLVED_PROTOCOL_FAMILIES;
-                preferredAddressType = InternetProtocolFamily.IPv6;
                 break;
             default:
                 throw new IllegalArgumentException("Unknown ResolvedAddressTypes " + resolvedAddressTypes);
         }
+        preferredAddressType = preferredAddressType(resolvedAddressTypes);
         this.authoritativeDnsServerCache = checkNotNull(authoritativeDnsServerCache, "authoritativeDnsServerCache");
-        this.nameServerComparator = new NameServerComparator(preferredAddressType.addressType());
+        nameServerComparator = new NameServerComparator(preferredAddressType.addressType());
 
         Bootstrap b = new Bootstrap();
         b.group(executor());
@@ -369,6 +366,19 @@ public class DnsNameResolver extends InetNameResolver {
                 authoritativeDnsServerCache.clear();
             }
         });
+    }
+
+    static InternetProtocolFamily preferredAddressType(ResolvedAddressTypes resolvedAddressTypes) {
+        switch (resolvedAddressTypes) {
+        case IPV4_ONLY:
+        case IPV4_PREFERRED:
+            return InternetProtocolFamily.IPv4;
+        case IPV6_ONLY:
+        case IPV6_PREFERRED:
+            return InternetProtocolFamily.IPv6;
+        default:
+            throw new IllegalArgumentException("Unknown ResolvedAddressTypes " + resolvedAddressTypes);
+        }
     }
 
     // Only here to override in unit tests.

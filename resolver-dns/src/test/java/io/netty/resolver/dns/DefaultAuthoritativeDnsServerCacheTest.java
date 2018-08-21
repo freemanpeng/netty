@@ -24,6 +24,7 @@ import org.junit.Test;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
@@ -137,4 +138,61 @@ public class DefaultAuthoritativeDnsServerCacheTest {
             group.shutdownGracefully();
         }
     }
+
+    @Test
+    public void testUseNoComparator() throws Exception {
+        testUseComparator0(true);
+    }
+
+    @Test
+    public void testUseComparator() throws Exception {
+        testUseComparator0(false);
+    }
+
+    private static void testUseComparator0(boolean noComparator) throws Exception {
+        InetSocketAddress unresolved = InetSocketAddress.createUnresolved("ns1", 53);
+        InetSocketAddress resolved = new InetSocketAddress(
+                InetAddress.getByAddress("ns2", new byte[] { 10, 0, 0, 2 }), 53);
+        EventLoopGroup group = new DefaultEventLoopGroup(1);
+
+        try {
+            EventLoop loop = group.next();
+            final DefaultAuthoritativeDnsServerCache cache;
+
+            if (noComparator) {
+                cache = new DefaultAuthoritativeDnsServerCache(10000, 10000, null);
+            }  else {
+                cache = new DefaultAuthoritativeDnsServerCache(10000, 10000,
+                                                               new Comparator<InetSocketAddress>() {
+                    @Override
+                    public int compare(InetSocketAddress o1, InetSocketAddress o2) {
+                        if (o1.equals(o2)) {
+                            return 0;
+                        }
+                        if (o1.isUnresolved()) {
+                            return 1;
+                        } else {
+                            return -1;
+                        }
+                    }
+                });
+            }
+            cache.cache("netty.io", unresolved, 100, loop);
+            cache.cache("netty.io", resolved, 10000, loop);
+
+            DnsServerAddressStream entries = cache.get("netty.io");
+            assertEquals(2, entries.size());
+
+            if (noComparator) {
+                assertEquals(unresolved, entries.next());
+                assertEquals(resolved, entries.next());
+            } else {
+                assertEquals(resolved, entries.next());
+                assertEquals(unresolved, entries.next());
+            }
+        } finally {
+            group.shutdownGracefully();
+        }
+    }
+
 }

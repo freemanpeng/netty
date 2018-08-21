@@ -20,6 +20,8 @@ import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.UnstableApi;
 
 import java.net.InetSocketAddress;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ConcurrentMap;
 
@@ -31,6 +33,9 @@ import static io.netty.util.internal.ObjectUtil.*;
 @UnstableApi
 public class DefaultAuthoritativeDnsServerCache implements AuthoritativeDnsServerCache {
 
+    private final int minTtl;
+    private final int maxTtl;
+    private final Comparator<InetSocketAddress> comparator;
     private final Cache<InetSocketAddress> resolveCache = new Cache<InetSocketAddress>() {
         @Override
         protected boolean shouldReplaceAll(InetSocketAddress entry) {
@@ -41,16 +46,20 @@ public class DefaultAuthoritativeDnsServerCache implements AuthoritativeDnsServe
         protected boolean equals(InetSocketAddress entry, InetSocketAddress otherEntry) {
             return entry.getHostName().equalsIgnoreCase(otherEntry.getHostName());
         }
-    };
 
-    private final int minTtl;
-    private final int maxTtl;
+        @Override
+        protected void sortEntries(String hostname, List<InetSocketAddress> entries) {
+            if (comparator != null) {
+                Collections.sort(entries, comparator);
+            }
+        }
+    };
 
     /**
      * Create a cache that respects the TTL returned by the DNS server.
      */
     public DefaultAuthoritativeDnsServerCache() {
-        this(0, Cache.MAX_SUPPORTED_TTL_SECS);
+        this(0, Cache.MAX_SUPPORTED_TTL_SECS, null);
     }
 
     /**
@@ -58,14 +67,17 @@ public class DefaultAuthoritativeDnsServerCache implements AuthoritativeDnsServe
      *
      * @param minTtl the minimum TTL
      * @param maxTtl the maximum TTL
+     * @param comparator the {@link Comparator} to order the {@link InetSocketAddress} for a hostname or {@code null}
+     *                   if insertion order should be used.
      */
-    public DefaultAuthoritativeDnsServerCache(int minTtl, int maxTtl) {
+    public DefaultAuthoritativeDnsServerCache(int minTtl, int maxTtl, Comparator<InetSocketAddress> comparator) {
         this.minTtl = Math.min(Cache.MAX_SUPPORTED_TTL_SECS, checkPositiveOrZero(minTtl, "minTtl"));
         this.maxTtl = Math.min(Cache.MAX_SUPPORTED_TTL_SECS, checkPositive(maxTtl, "maxTtl"));
         if (minTtl > maxTtl) {
             throw new IllegalArgumentException(
                     "minTtl: " + minTtl + ", maxTtl: " + maxTtl + " (expected: 0 <= minTtl <= maxTtl)");
         }
+        this.comparator = comparator;
     }
 
     @SuppressWarnings("unchecked")
