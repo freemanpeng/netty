@@ -499,11 +499,11 @@ abstract class DnsResolveContext<T> {
 
                     // We may have multiple ADDITIONAL entries for the same nameserver name. For example one AAAA and
                     // one A record.
-                    serverNames.handle(parent, r);
+                    serverNames.handleWithAdditional(parent, r);
                 }
 
                 // Process all unresolved nameservers as well.
-                serverNames.handleAll(parent, resolveCache());
+                serverNames.handleWithoutAdditionals(parent, resolveCache());
 
                 // Give the user the chance to sort or filter the used servers for the query.
                 DnsServerAddressStream serverStream = parent.uncachedRedirectDnsServerStream(
@@ -927,7 +927,7 @@ abstract class DnsResolveContext<T> {
         // We not expect the linked-list to be very long so a double-linked-list is overkill.
         private AuthoritativeNameServer head;
 
-        private int count;
+        private int resolvedCount;
 
         AuthoritativeNameServerList(String questionName) {
             this.questionName = questionName.toLowerCase(Locale.US);
@@ -971,7 +971,7 @@ abstract class DnsResolveContext<T> {
             // We are only interested in preserving the nameservers which are the closest to our qName, so ensure
             // we drop servers that have a smaller dots count.
             if (head == null || head.dots < dots) {
-                count = 1;
+                resolvedCount = 1;
                 head = new AuthoritativeNameServer(dots, r.timeToLive(), recordName, domainName);
             } else if (head.dots == dots) {
                 AuthoritativeNameServer serverName = head;
@@ -979,14 +979,11 @@ abstract class DnsResolveContext<T> {
                     serverName = serverName.next;
                 }
                 serverName.next = new AuthoritativeNameServer(dots, r.timeToLive(), recordName, domainName);
-                count++;
+                resolvedCount++;
             }
         }
 
-        /**
-         * Return the {@link AuthoritativeNameServer} for the {@code nsName} and mark it as handled.
-         */
-        void handle(DnsNameResolver parent, DnsRecord r) {
+        void handleWithAdditional(DnsNameResolver parent, DnsRecord r) {
             // Just walk the linked-list and mark the entry as handled when matched.
             AuthoritativeNameServer serverName = head;
 
@@ -1010,7 +1007,7 @@ abstract class DnsResolveContext<T> {
                         serverName.next = server;
                         serverName = server;
 
-                        count++;
+                        resolvedCount++;
                     }
                     // We should replace the TTL if needed with the one of the ADDITIONAL record so we use
                     // the smallest for caching.
@@ -1021,8 +1018,8 @@ abstract class DnsResolveContext<T> {
             }
         }
 
-        // No handle all AuthoritativeNameServer for which we had no ADDITIONAL record
-        void handleAll(DnsNameResolver parent, DnsCache cache) {
+        // Now handle all AuthoritativeNameServer for which we had no ADDITIONAL record
+        void handleWithoutAdditionals(DnsNameResolver parent, DnsCache cache) {
             AuthoritativeNameServer serverName = head;
 
             while (serverName != null) {
@@ -1037,8 +1034,7 @@ abstract class DnsResolveContext<T> {
                     } else {
                         // We have some entries in the cache.
                         for (int i = 0; i < entries.size(); i++) {
-                            DnsCacheEntry entry = entries.get(i);
-                            InetAddress address = entry.address();
+                            InetAddress address = entries.get(i).address();
                             if (address != null) {
                                 if (serverName.address != null) {
                                     AuthoritativeNameServer server = new AuthoritativeNameServer(serverName);
@@ -1046,7 +1042,7 @@ abstract class DnsResolveContext<T> {
                                     serverName.next = server;
                                     serverName = server;
 
-                                    count++;
+                                    resolvedCount++;
                                 }
                                 // Use a TTL of Long.MIN_VALUE as we don't want to cache the actual address later on as
                                 // we have no idea about how long the TTL should be. When we encounter Long.MIN_VALUE
@@ -1064,14 +1060,14 @@ abstract class DnsResolveContext<T> {
          * Returns {@code true} if empty, {@code false} otherwise.
          */
         boolean isEmpty() {
-            return count == 0;
+            return resolvedCount == 0;
         }
 
         /**
          * Creates a new {@link List} which holds the {@link InetSocketAddress}es.
          */
         List<InetSocketAddress> addressList() {
-            List<InetSocketAddress> addressList = new ArrayList<InetSocketAddress>(count);
+            List<InetSocketAddress> addressList = new ArrayList<InetSocketAddress>(resolvedCount);
 
             AuthoritativeNameServer server = head;
             while (server != null) {
