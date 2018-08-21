@@ -509,7 +509,7 @@ abstract class DnsResolveContext<T> {
                         authoritativeDnsServerCache(), parent.executor());
 
                 // Give the user the chance to sort or filter the used servers for the query.
-                DnsServerAddressStream serverStream = parent.uncachedRedirectDnsServerStream(
+                DnsServerAddressStream serverStream = parent.newRedirectDnsServerStream(
                         question.name(), addresses);
 
                 if (serverStream != null) {

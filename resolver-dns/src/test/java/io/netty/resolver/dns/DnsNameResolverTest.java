@@ -1524,6 +1524,13 @@ public class DnsNameResolverTest {
         final InetSocketAddress ns2Address = new InetSocketAddress(
                 InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 2 }),
                 DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns3Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 3 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns4Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 4 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+
         TestDnsServer redirectServer = new TestDnsServer(new HashSet<String>(Arrays.asList(hostname, ns1Name))) {
             @Override
             protected DnsMessage filterMessage(DnsMessage message) {
@@ -1534,6 +1541,8 @@ public class DnsNameResolverTest {
                         message.getAuthorityRecords().add(TestDnsServer.newNsRecord(domain, ns1Name));
                         message.getAdditionalRecords().add(newARecord(ns1Address));
                         message.getAdditionalRecords().add(newARecord(ns2Address));
+                        message.getAdditionalRecords().add(newARecord(ns3Address));
+                        message.getAdditionalRecords().add(newARecord(ns4Address));
                         return message;
                     }
                 }
@@ -1581,7 +1590,7 @@ public class DnsNameResolverTest {
                 DnsNameResolver.DEFAULT_SEARCH_DOMAINS, 0, true) {
 
             @Override
-            protected DnsServerAddressStream uncachedRedirectDnsServerStream(
+            protected DnsServerAddressStream newRedirectDnsServerStream(
                     String hostname, List<InetSocketAddress> nameservers) {
                 if (reversed) {
                     Collections.reverse(nameservers);
@@ -1597,21 +1606,26 @@ public class DnsNameResolverTest {
             assertTrue(cause instanceof UnknownHostException);
             DnsServerAddressStream redirected = redirectedRef.get();
             assertNotNull(redirected);
-            assertEquals(2, redirected.size());
-
-            assertEquals(2, cached.size());
+            assertEquals(4, redirected.size());
+            assertEquals(4, cached.size());
 
             if (reversed) {
+                assertEquals(ns4Address, redirected.next());
+                assertEquals(ns3Address, redirected.next());
                 assertEquals(ns2Address, redirected.next());
                 assertEquals(ns1Address, redirected.next());
             } else {
                 assertEquals(ns1Address, redirected.next());
                 assertEquals(ns2Address, redirected.next());
+                assertEquals(ns3Address, redirected.next());
+                assertEquals(ns4Address, redirected.next());
             }
 
             // We should always have the same order in the cache.
             assertEquals(ns1Address, cached.get(0));
             assertEquals(ns2Address, cached.get(1));
+            assertEquals(ns3Address, cached.get(2));
+            assertEquals(ns4Address, cached.get(3));
         } finally {
             resolver.close();
             group.shutdownGracefully(0, 0, TimeUnit.SECONDS);
