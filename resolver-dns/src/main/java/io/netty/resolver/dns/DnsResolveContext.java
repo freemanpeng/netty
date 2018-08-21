@@ -991,14 +991,14 @@ abstract class DnsResolveContext<T> {
             AuthoritativeNameServer serverName = head;
 
             String nsName = r.name();
+            InetAddress resolved = decodeAddress(r, nsName, parent.isDecodeIdn());
+            if (resolved == null) {
+                // Could not parse the address, just ignore.
+                return;
+            }
+
             while (serverName != null) {
                 if (serverName.nsName.equalsIgnoreCase(nsName)) {
-                    InetAddress resolved = decodeAddress(r, nsName, parent.isDecodeIdn());
-                    if (resolved == null) {
-                        // Could not parse it, move to the next.
-                        continue;
-                    }
-
                     if (serverName.address != null) {
                         // We received multiple ADDITIONAL records for the same name.
                         // Search for the last we insert before and then append a new one.
