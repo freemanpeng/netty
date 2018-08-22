@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
+import static java.util.Collections.singletonList;
+
 /**
  * Abstract cache that automatically removes entries for a hostname once the TTL for an entry is reached.
  *
@@ -177,7 +179,7 @@ abstract class Cache<E> {
                         if (shouldReplaceAll(firstEntry)) {
                             assert entries.size() == 1;
 
-                            if (compareAndSet(entries, Collections.singletonList(e))) {
+                            if (compareAndSet(entries, singletonList(e))) {
                                 scheduleCacheExpirationIfNeeded(ttl, loop);
                                 return;
                             } else {
@@ -217,13 +219,13 @@ abstract class Cache<E> {
                             scheduleCacheExpirationIfNeeded(ttl, loop);
                             return;
                         }
-                    } else if (compareAndSet(entries, Collections.singletonList(e))) {
+                    } else if (compareAndSet(entries, singletonList(e))) {
                         scheduleCacheExpirationIfNeeded(ttl, loop);
                         return;
                     }
                 }
             } else {
-                set(Collections.singletonList(e));
+                set(singletonList(e));
                 scheduleCacheExpirationIfNeeded(ttl, loop);
             }
         }

@@ -1633,6 +1633,147 @@ public class DnsNameResolverTest {
         }
     }
 
+    @Test
+    public void testNSRecordsFromCache() throws Exception {
+        final String domain = "netty.io";
+        final String hostname = "test.netty.io";
+        final String ns0Name = "ns0." + domain + '.';
+        final String ns1Name = "ns1." + domain + '.';
+        final String ns2Name = "ns2." + domain + '.';
+
+        final InetSocketAddress ns0Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns0Name, new byte[] { 10, 1, 0, 1 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns1Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 1 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns2Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 2 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns3Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 3 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns4Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns1Name, new byte[] { 10, 0, 0, 4 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        final InetSocketAddress ns5Address = new InetSocketAddress(
+                InetAddress.getByAddress(ns2Name, new byte[] { 10, 0, 0, 5 }),
+                DefaultDnsServerAddressStreamProvider.DNS_PORT);
+        TestDnsServer redirectServer = new TestDnsServer(new HashSet<String>(Arrays.asList(hostname, ns1Name))) {
+            @Override
+            protected DnsMessage filterMessage(DnsMessage message) {
+                for (QuestionRecord record: message.getQuestionRecords()) {
+                    if (record.getDomainName().equals(hostname)) {
+                        message.getAdditionalRecords().clear();
+                        message.getAnswerRecords().clear();
+                        message.getAuthorityRecords().add(TestDnsServer.newNsRecord(domain, ns0Name));
+                        message.getAuthorityRecords().add(TestDnsServer.newNsRecord(domain, ns1Name));
+                        message.getAuthorityRecords().add(TestDnsServer.newNsRecord(domain, ns2Name));
+
+                        message.getAdditionalRecords().add(newARecord(ns0Address));
+                        message.getAdditionalRecords().add(newARecord(ns5Address));
+
+                        return message;
+                    }
+                }
+                return message;
+            }
+
+            private ResourceRecord newARecord(InetSocketAddress address) {
+                return TestDnsServer.newARecord(address.getHostName(), address.getAddress().getHostAddress());
+            }
+        };
+        redirectServer.start();
+        EventLoopGroup group = new NioEventLoopGroup(1);
+
+        final List<InetSocketAddress> cached = new CopyOnWriteArrayList<InetSocketAddress>();
+        final AuthoritativeDnsServerCache authoritativeDnsServerCache = new AuthoritativeDnsServerCache() {
+            @Override
+            public DnsServerAddressStream get(String hostname) {
+                return null;
+            }
+
+            @Override
+            public void cache(String hostname, InetSocketAddress address, long originalTtl, EventLoop loop) {
+                cached.add(address);
+            }
+
+            @Override
+            public void clear() {
+                // NOOP
+            }
+
+            @Override
+            public boolean clear(String hostname) {
+                return false;
+            }
+        };
+
+        EventLoop loop = group.next();
+        DefaultDnsCache cache = new DefaultDnsCache();
+        cache.cache(ns1Name, null, ns1Address.getAddress(), 10000, loop);
+        cache.cache(ns1Name, null, ns2Address.getAddress(), 10000, loop);
+        cache.cache(ns1Name, null, ns3Address.getAddress(), 10000, loop);
+        cache.cache(ns1Name, null, ns4Address.getAddress(), 10000, loop);
+
+        final AtomicReference<DnsServerAddressStream> redirectedRef = new AtomicReference<DnsServerAddressStream>();
+        final DnsNameResolver resolver = new DnsNameResolver(
+                loop, new ReflectiveChannelFactory<DatagramChannel>(NioDatagramChannel.class),
+                cache, authoritativeDnsServerCache,
+                NoopDnsQueryLifecycleObserverFactory.INSTANCE, 2000, ResolvedAddressTypes.IPV4_ONLY,
+                true, 10, true, 4096,
+                false, HostsFileEntriesResolver.DEFAULT,
+                new SingletonDnsServerAddressStreamProvider(redirectServer.localAddress()),
+                DnsNameResolver.DEFAULT_SEARCH_DOMAINS, 0, true) {
+
+            @Override
+            protected DnsServerAddressStream newRedirectDnsServerStream(
+                    String hostname, List<InetSocketAddress> nameservers) {
+                DnsServerAddressStream stream = new SequentialDnsServerAddressStream(nameservers, 0);
+                redirectedRef.set(stream);
+                return stream;
+            }
+        };
+
+        try {
+            Throwable cause = resolver.resolveAll(hostname).await().cause();
+            assertTrue(cause instanceof UnknownHostException);
+            DnsServerAddressStream redirected = redirectedRef.get();
+            assertNotNull(redirected);
+            assertEquals(6, redirected.size());
+            assertEquals(6, cached.size());
+
+            // The redirected addresses should have been retrieven from the DnsCache if not resolved, so these are
+            // fully resolved.
+            assertEquals(ns0Address, redirected.next());
+            assertEquals(ns1Address, redirected.next());
+            assertEquals(ns2Address, redirected.next());
+            assertEquals(ns3Address, redirected.next());
+            assertEquals(ns4Address, redirected.next());
+            assertEquals(ns5Address, redirected.next());
+
+            // As this address was supplied as ADDITIONAL we should put it resolved into the cache.
+            assertEquals(ns0Address, cached.get(0));
+
+            // We should have put the unresolved address in the AuthoritativeDnsServerCache.
+            assertEquals(unresolved(ns1Address), cached.get(1));
+            assertEquals(unresolved(ns2Address), cached.get(2));
+            assertEquals(unresolved(ns3Address), cached.get(3));
+            assertEquals(unresolved(ns4Address), cached.get(4));
+
+            // As this address was supplied as ADDITIONAL we should put it resolved into the cache.
+            assertEquals(ns5Address, cached.get(5));
+        } finally {
+            resolver.close();
+            group.shutdownGracefully(0, 0, TimeUnit.SECONDS);
+            redirectServer.stop();
+        }
+    }
+
+    private static InetSocketAddress unresolved(InetSocketAddress address) {
+        return InetSocketAddress.createUnresolved(address.getHostString(), address.getPort());
+    }
+
     private static void resolve(DnsNameResolver resolver, Map<String, Future<InetAddress>> futures, String hostname) {
         futures.put(hostname, resolver.resolve(hostname));
     }

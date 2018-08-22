@@ -22,10 +22,10 @@ import java.util.List;
 
 final class SequentialDnsServerAddressStream implements DnsServerAddressStream {
 
-    private final List<InetSocketAddress> addresses;
+    private final List<? extends InetSocketAddress> addresses;
     private int i;
 
-    SequentialDnsServerAddressStream(List<InetSocketAddress> addresses, int startIdx) {
+    SequentialDnsServerAddressStream(List<? extends InetSocketAddress> addresses, int startIdx) {
         this.addresses = addresses;
         i = startIdx;
     }
@@ -57,7 +57,7 @@ final class SequentialDnsServerAddressStream implements DnsServerAddressStream {
         return toString("sequential", i, addresses);
     }
 
-    static String toString(String type, int index, Collection<InetSocketAddress> addresses) {
+    static String toString(String type, int index, Collection<? extends InetSocketAddress> addresses) {
         final StringBuilder buf = new StringBuilder(type.length() + 2 + addresses.size() * 16);
         buf.append(type).append("(index: ").append(index);
         buf.append(", addrs: (");

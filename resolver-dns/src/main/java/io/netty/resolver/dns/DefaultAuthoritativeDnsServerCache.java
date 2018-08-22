@@ -44,6 +44,9 @@ public class DefaultAuthoritativeDnsServerCache implements AuthoritativeDnsServe
 
         @Override
         protected boolean equals(InetSocketAddress entry, InetSocketAddress otherEntry) {
+            if (PlatformDependent.javaVersion() >= 7) {
+                return entry.getHostString().equalsIgnoreCase(otherEntry.getHostString());
+            }
             return entry.getHostName().equalsIgnoreCase(otherEntry.getHostName());
         }
 
@@ -89,7 +92,7 @@ public class DefaultAuthoritativeDnsServerCache implements AuthoritativeDnsServe
         if (addresses == null || addresses.isEmpty()) {
             return null;
         }
-        return new SequentialDnsServerAddressStream((List<InetSocketAddress>) addresses, 0);
+        return new SequentialDnsServerAddressStream(addresses, 0);
     }
 
     @Override

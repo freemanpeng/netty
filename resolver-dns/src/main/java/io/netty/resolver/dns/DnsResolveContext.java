@@ -1088,29 +1088,6 @@ abstract class DnsResolveContext<T> {
             }
             return addressList;
         }
-
-        /**
-         * Add an authoritative nameserver to the cache if its not a root server.
-         */
-        void cache(AuthoritativeDnsServerCache cache, InetSocketAddress address, EventLoop loop) {
-            AuthoritativeNameServer server = head;
-            while (server != null) {
-                // Cache NS record if not for a root server as we should never cache for root servers.
-                if (!server.isRootServer() && address.equals(server.address)) {
-
-                    // If we resolved the AuthoritativeNameServer via the DnsCache before we should not cache the
-                    // resolved address as we don't have a good idea about the TTL to apply. We will just cache
-                    // the unresolved address for now. We will then query the cache again the next time we try to use
-                    // it for a query which will do the correct thing in terms of respecting the TTL of the A / AAAA
-                    // record.
-                    InetSocketAddress addressToCache = server.ttl == Long.MIN_VALUE ?
-                            InetSocketAddress.createUnresolved(server.nsName, address.getPort()) : server.address;
-                    cache.cache(server.domainName, addressToCache, server.ttl, loop);
-                }
-
-                server = server.next;
-            }
-        }
     }
 
     private static final class AuthoritativeNameServer {
